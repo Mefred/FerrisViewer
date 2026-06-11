@@ -1,3 +1,4 @@
+use minifb::{self, Window, WindowOptions};
 use std::fs;
 
 // Todo:
@@ -8,9 +9,9 @@ pub struct Image {
     image: Vec<u8>,
     width: u32,
     height: u32,
-    pixels: Vec<u8>,
+    pixels: Vec<u32>,
     bits_per_pixel: u16,
-    compresion: u32,
+    pixel_offset: u32,
 }
 
 impl Image {
@@ -21,7 +22,7 @@ impl Image {
             height: 0,
             pixels: Vec::new(),
             bits_per_pixel: 0,
-            compresion: 0,
+            pixel_offset: 0,
         }
     }
 
@@ -45,53 +46,65 @@ impl Image {
             self.image[25],
         ]);
 
-        self.compresion = u32::from_le_bytes([
-            self.image[30],
-            self.image[31],
-            self.image[32],
-            self.image[33],
-        ]);
-
         self.bits_per_pixel = u16::from_le_bytes([self.image[28], self.image[29]]);
 
-        if self.compresion != 0 {
-            todo!("add compresion");
-            return;
-        }
-
-        let mut pos = u32::from_le_bytes([
+        self.pixel_offset = u32::from_le_bytes([
             self.image[10],
             self.image[11],
             self.image[12],
             self.image[13],
         ]);
 
-        let mut num_times = if self.bits_per_pixel == 24 {
-            self.width * self.height * 3
+        let num_pixels = if self.bits_per_pixel == 32 {
+            4
+        } else if self.bits_per_pixel == 24 {
+            3
         } else {
-            self.width * self.height * 4
+            panic!("not supported format")
         };
-        num_times += pos;
 
-        while pos <= num_times {
-            let b = self.image[pos as usize];
-            pos += 1;
-            let g = self.image[pos as usize];
-            pos += 1;
-            let r = self.image[pos as usize];
-            pos += 1;
-            if self.bits_per_pixel == 32 {
-                let a = self.image[pos as usize];
-                pos += 1;
-                self.pixels.push(r);
-                self.pixels.push(g);
-                self.pixels.push(b);
-                self.pixels.push(a);
-            } else {
-                self.pixels.push(r);
-                self.pixels.push(g);
-                self.pixels.push(b);
+        let raw_row_size = self.width * num_pixels;
+        let padded_row_size = ((raw_row_size + 3) / 4) * 4;
+
+        for row in 0..self.height {
+            for pixel in 0..self.width {
+                let pos: usize = (self.pixel_offset
+                    + (self.height - 1 - row) * padded_row_size
+                    + pixel * num_pixels) as usize;
+                let b = self.image[pos];
+                let g = self.image[pos + 1];
+                let r = self.image[pos + 2];
+                if num_pixels == 4 {
+                    let a = self.image[pos + 3];
+                    let pixel_full: u32 =
+                        ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
+                    self.pixels.push(pixel_full);
+                } else if num_pixels == 3 {
+                    let pixel_full: u32 = ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
+                    self.pixels.push(pixel_full);
+                } else {
+                    panic!("idk how it got this far");
+                }
             }
+        }
+    }
+
+    pub fn draw(&mut self) {
+        let mut window = Window::new(
+            "image",
+            self.width as usize,
+            self.height as usize,
+            WindowOptions {
+                scale: minifb::Scale::X1,
+                ..WindowOptions::default()
+            },
+        )
+        .unwrap();
+        window
+            .update_with_buffer(&self.pixels, self.width as usize, self.height as usize)
+            .unwrap();
+        while window.is_open() {
+            window.update();
         }
     }
 }
