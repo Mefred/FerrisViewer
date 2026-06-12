@@ -1,11 +1,7 @@
 use minifb::{self, Window, WindowOptions};
 use std::fs;
 
-// Todo:
-// Fix padding
-// Finish
-
-pub struct Image {
+pub struct Bmp {
     image: Vec<u8>,
     width: u32,
     height: u32,
@@ -14,7 +10,7 @@ pub struct Image {
     pixel_offset: u32,
 }
 
-impl Image {
+impl Bmp {
     pub fn new(path: &str) -> Self {
         Self {
             image: fs::read(path).unwrap(),
@@ -89,7 +85,7 @@ impl Image {
         }
     }
 
-    pub fn draw(&mut self) {
+    pub fn draw(self) {
         let mut window = Window::new(
             "image",
             self.width as usize,
