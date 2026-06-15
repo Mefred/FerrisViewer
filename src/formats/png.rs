@@ -1,9 +1,7 @@
 use flate2::read::ZlibDecoder;
 use minifb::{self, Window, WindowOptions};
-use std::cmp::min;
 use std::fs;
 use std::io::Read;
-use std::path::absolute;
 
 pub struct Png {
     image: Vec<u8>,
@@ -17,6 +15,7 @@ pub struct Png {
     idat_data: Vec<u8>,
     decompressed_data: Vec<u8>,
     pixels: Vec<u32>,
+    reconstructed_data: Vec<u8>,
 }
 
 impl Png {
@@ -33,6 +32,7 @@ impl Png {
             idat_data: Vec::new(),
             decompressed_data: Vec::new(),
             pixels: Vec::new(),
+            reconstructed_data: Vec::new(),
         }
     }
 
@@ -62,11 +62,6 @@ impl Png {
         self.color_type = self.image[pos];
         pos += 1;
 
-        if self.color_type != 2 {
-            println!("{}", self.color_type);
-            panic!("not supported color type");
-        }
-
         self.compression = self.image[pos];
         pos += 1;
 
@@ -79,10 +74,20 @@ impl Png {
         pos += 1;
 
         self.interlace = self.image[pos];
-        pos += 1;
 
         if self.interlace != 0 {
             panic!("interlace idk");
+        }
+    }
+
+    fn bytes_per_pixel(&self) -> usize {
+        match self.color_type {
+            0 => 1, // grayscale
+            2 => 3, // rgb
+            3 => 1, // indexed
+            4 => 2, // grayscale + alpha
+            6 => 4, // rgba
+            _ => panic!("invalid bit depth {}", self.bit_depth),
         }
     }
 
@@ -134,145 +139,110 @@ impl Png {
         return closest as u8;
     }
 
-    fn parse_decompressed_data(&mut self) {
-        self.pixels.reserve((self.width * self.height) as usize);
-        let mut previus_row = vec![0u8; 3 * self.width as usize];
+    fn reconstruct_scanlines(&mut self) {
+        let bpp = self.bytes_per_pixel();
+
+        let mut previus_row = vec![0u8; self.bytes_per_pixel() * self.width as usize];
+        let scanline_len = 1 + self.width * self.bytes_per_pixel() as u32;
+
         for row in 0..self.height {
-            let pos = row * (1 + self.width * 3);
+            let mut current_row = vec![0u8; self.bytes_per_pixel() * self.width as usize];
+
+            let pos = row * scanline_len;
             let filter = self.decompressed_data[pos as usize];
 
-            let mut left_r = 0u8;
-            let mut left_g = 0u8;
-            let mut left_b = 0u8;
+            for byte in 1..scanline_len {
+                let idx = byte as usize - 1;
 
-            let mut current_row = vec![0u8; 3 * self.width as usize];
-            for unit in 0..self.width {
-                let pos = row * (1 + self.width * 3) + 1 + unit * 3;
+                let pos = byte + row * scanline_len;
 
-                let r = self.decompressed_data[pos as usize];
-                let g = self.decompressed_data[1 + pos as usize];
-                let b = self.decompressed_data[2 + pos as usize];
+                let raw_byte = self.decompressed_data[pos as usize];
 
-                if filter == 0 {
-                    let full: u32 =
-                        ((0xFF << 24) | (r as u32) << 16) | ((g as u32) << 8) | b as u32;
-                    self.pixels.push(full);
-
-                    current_row[3 * unit as usize] = r;
-                    current_row[1 + 3 * unit as usize] = g;
-                    current_row[2 + 3 * unit as usize] = b;
-                } else if filter == 1 {
-                    left_r = left_r.wrapping_add(r);
-                    left_g = left_g.wrapping_add(g);
-                    left_b = left_b.wrapping_add(b);
-
-                    let full: u32 = ((0xFF << 24) | (left_r as u32) << 16)
-                        | ((left_g as u32) << 8)
-                        | left_b as u32;
-
-                    self.pixels.push(full);
-
-                    current_row[3 * unit as usize] = left_r;
-                    current_row[1 + 3 * unit as usize] = left_g;
-                    current_row[2 + 3 * unit as usize] = left_b;
-                } else if filter == 2 {
-                    let r2 = previus_row[3 * unit as usize].wrapping_add(r);
-                    let g2 = previus_row[1 + 3 * unit as usize].wrapping_add(g);
-                    let b2 = previus_row[2 + 3 * unit as usize].wrapping_add(b);
-
-                    let full: u32 =
-                        ((0xFF << 24) | (r2 as u32) << 16) | ((g2 as u32) << 8) | b2 as u32;
-
-                    self.pixels.push(full);
-
-                    current_row[3 * unit as usize] = r2;
-                    current_row[1 + 3 * unit as usize] = g2;
-                    current_row[2 + 3 * unit as usize] = b2;
-                } else if filter == 3 {
-                    let above_r = previus_row[3 * unit as usize];
-                    let above_g = previus_row[1 + 3 * unit as usize];
-                    let above_b = previus_row[2 + 3 * unit as usize];
-
-                    let pr = ((left_r as u16 + above_r as u16) / 2) as u8;
-                    let pg = ((left_g as u16 + above_g as u16) / 2) as u8;
-                    let pb = ((left_b as u16 + above_b as u16) / 2) as u8;
-
-                    let r2 = r.wrapping_add(pr);
-                    let g2 = g.wrapping_add(pg);
-                    let b2 = b.wrapping_add(pb);
-
-                    let full: u32 =
-                        ((0xFF << 24) | (r2 as u32) << 16) | ((g2 as u32) << 8) | b2 as u32;
-
-                    self.pixels.push(full);
-
-                    left_r = r2;
-                    left_g = g2;
-                    left_b = b2;
-
-                    current_row[3 * unit as usize] = r2;
-                    current_row[1 + 3 * unit as usize] = g2;
-                    current_row[2 + 3 * unit as usize] = b2;
-                } else if filter == 4 {
-                    let closest = self.paeth_predictor(
-                        left_r,
-                        previus_row[3 * unit as usize],
-                        if row == 0 {
-                            0
-                        } else if unit == 0 {
-                            0
-                        } else {
-                            previus_row[3 * (unit - 1) as usize]
-                        },
-                    );
-
-                    let r2 = r.wrapping_add(closest);
-
-                    let closest = self.paeth_predictor(
-                        left_g,
-                        previus_row[1 + 3 * unit as usize],
-                        if row == 0 {
-                            0
-                        } else if unit == 0 {
-                            0
-                        } else {
-                            previus_row[1 + 3 * (unit - 1) as usize]
-                        },
-                    );
-
-                    let g2 = g.wrapping_add(closest);
-
-                    let closest = self.paeth_predictor(
-                        left_b,
-                        previus_row[2 + 3 * unit as usize],
-                        if row == 0 {
-                            0
-                        } else if unit == 0 {
-                            0
-                        } else {
-                            previus_row[2 + 3 * (unit - 1) as usize]
-                        },
-                    );
-
-                    let b2 = b.wrapping_add(closest);
-
-                    let full: u32 =
-                        ((0xFF << 24) | (r2 as u32) << 16) | ((g2 as u32) << 8) | b2 as u32;
-
-                    self.pixels.push(full);
-
-                    left_r = r2;
-                    left_g = g2;
-                    left_b = b2;
-
-                    current_row[3 * unit as usize] = r2;
-                    current_row[1 + 3 * unit as usize] = g2;
-                    current_row[2 + 3 * unit as usize] = b2;
+                let left = if idx >= bpp {
+                    current_row[idx - bpp]
                 } else {
-                    self.pixels.push(0);
+                    0
+                };
+
+                let above = previus_row[idx];
+
+                let upper_left = if idx >= bpp {
+                    previus_row[idx - bpp]
+                } else {
+                    0
+                };
+
+                current_row[idx] = match filter {
+                    0 => raw_byte,
+                    1 => raw_byte.wrapping_add(left),
+                    2 => raw_byte.wrapping_add(above),
+                    3 => raw_byte.wrapping_add(((left as u16 + above as u16) / 2) as u8),
+                    4 => raw_byte.wrapping_add(self.paeth_predictor(left, above, upper_left)),
+                    _ => panic!("invalid filter"),
                 }
             }
+            self.reconstructed_data.extend_from_slice(&current_row);
             previus_row = current_row;
+        }
+    }
+
+    fn decode_pixels(&mut self) {
+        match self.color_type {
+            0 => self.decode_grayscale(),
+            2 => self.decode_rgb(),
+            4 => self.decode_grayscale_alpha(),
+            6 => self.decode_rgba(),
+            _ => panic!("not supporting index color type yet"),
+        }
+    }
+
+    fn decode_grayscale(&mut self) {
+        self.pixels.reserve(self.reconstructed_data.len());
+        for gray in &self.reconstructed_data {
+            let full: u32 =
+                (0xFF << 24) | ((*gray as u32) << 16) | ((*gray as u32) << 8) | *gray as u32;
+
+            self.pixels.push(full);
+        }
+    }
+
+    fn decode_rgb(&mut self) {
+        self.pixels.reserve(self.reconstructed_data.len() / 3);
+        for pixel in self.reconstructed_data.chunks_exact(3) {
+            let r = pixel[0];
+            let g = pixel[1];
+            let b = pixel[2];
+
+            let full: u32 = ((0xFF << 24) | (r as u32) << 16) | ((g as u32) << 8) | b as u32;
+
+            self.pixels.push(full);
+        }
+    }
+
+    fn decode_grayscale_alpha(&mut self) {
+        self.pixels.reserve(self.reconstructed_data.len() / 2);
+        for pixel in self.reconstructed_data.chunks_exact(2) {
+            let gray = pixel[0];
+            let alpha = pixel[1];
+
+            let full: u32 =
+                ((alpha as u32) << 24) | ((gray as u32) << 16) | ((gray as u32) << 8) | gray as u32;
+
+            self.pixels.push(full);
+        }
+    }
+
+    fn decode_rgba(&mut self) {
+        self.pixels.reserve(self.reconstructed_data.len() / 4);
+        for pixel in self.reconstructed_data.chunks_exact(4) {
+            let r = pixel[0];
+            let g = pixel[1];
+            let b = pixel[2];
+            let a = pixel[3];
+
+            let full: u32 = ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
+
+            self.pixels.push(full);
         }
     }
 
@@ -281,7 +251,8 @@ impl Png {
         self.parse_ihdr();
         self.parse_chunks();
         self.decompress_data();
-        self.parse_decompressed_data();
+        self.reconstruct_scanlines();
+        self.decode_pixels();
     }
 
     pub fn draw(&mut self) {
