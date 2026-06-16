@@ -5,7 +5,7 @@ FerrisViewer is a simple rust project for displaying images.
 
 ## Features
 - **Supported Formats**:
-  - **PNG**: Supports Zlib-compressed 8-bit RGB, RGBA, Grayscale, Grayscale + Alpha formats. Includes manual implementations for PNG scanline filters (None, Sub, Up, Average, and Paeth). Aswell as window resizing.
+  - **PNG**: Supports Zlib-compressed 8-bit RGB, RGBA, Grayscale, Grayscale + Alpha, Index (palette support) formats. Includes manual implementations for PNG scanline filters (None, Sub, Up, Average, and Paeth). Aswell as window resizing.
   - **BMP**: Supports 24-bit (RGB) and 32-bit (RGBA) uncompressed Windows Bitmap files, factoring in pixel data row padding. Window resizing soon.
   - **TGA**: Supports 24-bit and 32-bit uncompressed True-Color Truevision TGA images. Window resizing soon.
 
@@ -28,6 +28,6 @@ On Windows, you can simply and drag any compatible .png, .bmp, or .tga file dire
 ## Limitations
 
 Since this viewer uses entirely custom parsers built for learning purposes:
-- PNG: Interlaced PNGs, and indexed colors aswell as bit-depths other than 8-bit are not supported.
+- PNG: Interlaced PNGs and bit-depths other than 8-bit are not supported.
 - TGA: Compressed (RLE) TGA images are currently unsupported.
 - Extensions: The application detects files strictly by their final 3-character extension (png, bmp, tga).
