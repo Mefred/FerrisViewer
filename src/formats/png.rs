@@ -256,11 +256,15 @@ impl Png {
     }
 
     pub fn draw(&mut self) {
+        let image_w = self.width as usize;
+        let image_h = self.height as usize;
+
         let mut window = Window::new(
             "image",
-            self.width as usize,
-            self.height as usize,
+            image_w.min(1600),
+            image_h.min(900),
             WindowOptions {
+                resize: true,
                 scale: minifb::Scale::X1,
                 ..WindowOptions::default()
             },
@@ -274,7 +278,38 @@ impl Png {
             .unwrap();
 
         while window.is_open() {
-            window.update();
+            let (window_w, window_h) = window.get_size();
+
+            let scale_x = window_w as f32 / image_w as f32;
+            let scale_y = window_h as f32 / image_h as f32;
+            let scale = scale_x.min(scale_y).min(1.0);
+
+            let draw_w = ((image_w as f32 * scale) as usize).max(1);
+            let draw_h = ((image_h as f32 * scale) as usize).max(1);
+
+            let mut buffer = vec![0u32; window_h * window_w];
+
+            for y in 0..draw_h {
+                let src_y = (y * image_h / draw_h).min(image_h - 1);
+
+                for x in 0..draw_w {
+                    let src_x = (x * image_w / draw_w).min(image_w - 1);
+
+                    let pixel = self.pixels[src_y * image_w + src_x];
+
+                    let offset_x = window_w.saturating_sub(draw_w) / 2;
+                    let offset_y = window_h.saturating_sub(draw_h) / 2;
+
+                    let dist_x = offset_x + x;
+                    let dist_y = offset_y + y;
+
+                    buffer[dist_y * window_w + dist_x] = pixel;
+                }
+            }
+
+            window
+                .update_with_buffer(&buffer, window_w, window_h)
+                .unwrap();
         }
     }
 }
