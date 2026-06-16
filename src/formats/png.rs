@@ -16,6 +16,7 @@ pub struct Png {
     decompressed_data: Vec<u8>,
     pixels: Vec<u32>,
     reconstructed_data: Vec<u8>,
+    palette: Vec<u8>,
 }
 
 impl Png {
@@ -33,6 +34,7 @@ impl Png {
             decompressed_data: Vec::new(),
             pixels: Vec::new(),
             reconstructed_data: Vec::new(),
+            palette: Vec::new(),
         }
     }
 
@@ -105,6 +107,7 @@ impl Png {
 
             match &chunk_type {
                 b"IDAT" => self.idat_data.extend_from_slice(&data),
+                b"PLTE" => self.palette = data,
                 b"IEND" => break,
                 _ => (),
             }
@@ -190,6 +193,7 @@ impl Png {
         match self.color_type {
             0 => self.decode_grayscale(),
             2 => self.decode_rgb(),
+            3 => self.decode_index(),
             4 => self.decode_grayscale_alpha(),
             6 => self.decode_rgba(),
             _ => panic!("not supporting index color type yet"),
@@ -209,11 +213,11 @@ impl Png {
     fn decode_rgb(&mut self) {
         self.pixels.reserve(self.reconstructed_data.len() / 3);
         for pixel in self.reconstructed_data.chunks_exact(3) {
-            let r = pixel[0];
-            let g = pixel[1];
-            let b = pixel[2];
+            let r = pixel[0] as u32;
+            let g = pixel[1] as u32;
+            let b = pixel[2] as u32;
 
-            let full: u32 = ((0xFF << 24) | (r as u32) << 16) | ((g as u32) << 8) | b as u32;
+            let full: u32 = (0xFF << 24) | (r << 16) | (g << 8) | b;
 
             self.pixels.push(full);
         }
@@ -235,12 +239,27 @@ impl Png {
     fn decode_rgba(&mut self) {
         self.pixels.reserve(self.reconstructed_data.len() / 4);
         for pixel in self.reconstructed_data.chunks_exact(4) {
-            let r = pixel[0];
-            let g = pixel[1];
-            let b = pixel[2];
-            let a = pixel[3];
+            let r = pixel[0] as u32;
+            let g = pixel[1] as u32;
+            let b = pixel[2] as u32;
+            let a = pixel[3] as u32;
 
-            let full: u32 = ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
+            let full: u32 = (a << 24) | (r << 16) | (g << 8) | b;
+
+            self.pixels.push(full);
+        }
+    }
+
+    fn decode_index(&mut self) {
+        self.pixels.reserve(self.reconstructed_data.len());
+        for &pixel in &self.reconstructed_data {
+            let palette_pos = pixel as usize * 3;
+
+            let r = self.palette[palette_pos] as u32;
+            let g = self.palette[palette_pos + 1] as u32;
+            let b = self.palette[palette_pos + 2] as u32;
+
+            let full: u32 = (0xFF << 24) | (r << 16) | (g << 8) | b;
 
             self.pixels.push(full);
         }
