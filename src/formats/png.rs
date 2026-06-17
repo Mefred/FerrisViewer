@@ -17,6 +17,7 @@ pub struct Png {
     pixels: Vec<u32>,
     reconstructed_data: Vec<u8>,
     palette: Vec<u8>,
+    tRNS: Vec<u8>,
 }
 
 impl Png {
@@ -35,6 +36,7 @@ impl Png {
             pixels: Vec::new(),
             reconstructed_data: Vec::new(),
             palette: Vec::new(),
+            tRNS: Vec::new(),
         }
     }
 
@@ -55,11 +57,6 @@ impl Png {
 
         self.bit_depth = self.image[pos];
         pos += 1;
-
-        if self.bit_depth != 8 {
-            println!("{}", self.bit_depth);
-            panic!("not supported bit depth");
-        }
 
         self.color_type = self.image[pos];
         pos += 1;
@@ -108,6 +105,7 @@ impl Png {
             match &chunk_type {
                 b"IDAT" => self.idat_data.extend_from_slice(&data),
                 b"PLTE" => self.palette = data,
+                b"tRNS" => self.tRNS.extend_from_slice(&data),
                 b"IEND" => break,
                 _ => (),
             }
@@ -146,6 +144,7 @@ impl Png {
         let bpp = self.bytes_per_pixel();
 
         let mut previus_row = vec![0u8; self.bytes_per_pixel() * self.width as usize];
+
         let scanline_len = 1 + self.width * self.bytes_per_pixel() as u32;
 
         for row in 0..self.height {
@@ -259,7 +258,13 @@ impl Png {
             let g = self.palette[palette_pos + 1] as u32;
             let b = self.palette[palette_pos + 2] as u32;
 
-            let full: u32 = (0xFF << 24) | (r << 16) | (g << 8) | b;
+            let a: u32 = if self.tRNS.len() > pixel as usize {
+                self.tRNS[pixel as usize] as u32
+            } else {
+                255
+            };
+
+            let full: u32 = (a << 24) | (r << 16) | (g << 8) | b;
 
             self.pixels.push(full);
         }
