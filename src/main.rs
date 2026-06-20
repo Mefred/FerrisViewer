@@ -24,9 +24,13 @@ fn main() {
         .collect();
 
     if file_type.to_lowercase() == "png" {
-        let mut image = Png::new(&path);
-        image.parse();
-        image.draw();
+        match Png::new(path) {
+            Ok(mut image) => match image.parse() {
+                Ok(_) => image.draw(),
+                Err(e) => println!("Failed to load image: {:?}", e),
+            },
+            Err(e) => println!("Failed to extract image: {:?}", e),
+        }
     } else if file_type.to_lowercase() == "bmp" {
         let mut image = Bmp::new(&path);
         image.parse();

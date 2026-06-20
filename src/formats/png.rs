@@ -3,6 +3,21 @@ use minifb::{self, Window, WindowOptions};
 use std::fs;
 use std::io::Read;
 
+#[derive(Debug)]
+pub enum PngError {
+    InvalidSignature,
+    UnsupportedBitDepth(u8),
+    UnsupportedBitDepthForGrayscale(u8),
+    UnsupportedColorType(u8),
+    UnsupportedCompression(u8),
+    UnsupportedInterlace(u8),
+    UnsupportedFilter(u8),
+    UnexpectedEndOfFile,
+    CorruptChunk,
+    DecompressionFailed,
+    FileReadFailed,
+}
+
 pub struct Png {
     image: Vec<u8>,
     width: u32,
@@ -21,9 +36,9 @@ pub struct Png {
 }
 
 impl Png {
-    pub fn new(path: &str) -> Self {
-        Self {
-            image: fs::read(path).unwrap(),
+    pub fn new(path: &str) -> Result<Self, PngError> {
+        Ok(Self {
+            image: fs::read(path).map_err(|_| PngError::FileReadFailed)?,
             width: 0,
             height: 0,
             bit_depth: 0,
@@ -37,16 +52,25 @@ impl Png {
             reconstructed_data: Vec::new(),
             palette: Vec::new(),
             tRNS: Vec::new(),
-        }
+        })
     }
 
-    fn check_signature(&mut self) {
+    fn check_signature(&mut self) -> Result<(), PngError> {
+        if self.image.len() < 8 {
+            return Err(PngError::UnexpectedEndOfFile);
+        }
+
         if self.image[0..8] != [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
-            panic!("Not a valid png");
+            return Err(PngError::InvalidSignature);
         }
+        Ok(())
     }
 
-    fn parse_ihdr(&mut self) {
+    fn parse_ihdr(&mut self) -> Result<(), PngError> {
+        if self.image.len() < 33 {
+            return Err(PngError::UnexpectedEndOfFile);
+        }
+
         let mut pos = 16;
 
         self.width = u32::from_be_bytes(self.image[pos..pos + 4].try_into().unwrap());
@@ -58,15 +82,25 @@ impl Png {
         self.bit_depth = self.image[pos];
         pos += 1;
 
+        match self.bit_depth {
+            1 | 2 | 4 | 8 => (),
+            16 => return Err(PngError::UnsupportedBitDepth(16)),
+            _ => return Err(PngError::UnsupportedBitDepth(self.bit_depth)),
+        }
+
         self.color_type = self.image[pos];
         pos += 1;
+
+        match self.color_type {
+            0 | 2 | 3 | 4 | 6 => (),
+            _ => return Err(PngError::UnsupportedColorType(self.color_type)),
+        }
 
         self.compression = self.image[pos];
         pos += 1;
 
         if self.compression != 0 {
-            println!("{}", self.compression);
-            panic!("not supported compression");
+            return Err(PngError::UnsupportedCompression(self.compression));
         }
 
         self.filter = self.image[pos];
@@ -75,8 +109,10 @@ impl Png {
         self.interlace = self.image[pos];
 
         if self.interlace != 0 {
-            panic!("interlace idk");
+            return Err(PngError::UnsupportedInterlace(self.interlace));
         }
+
+        Ok(())
     }
 
     fn bytes_per_pixel(&self) -> usize {
@@ -90,17 +126,27 @@ impl Png {
         }
     }
 
-    fn parse_chunks(&mut self) {
+    fn parse_chunks(&mut self) -> Result<(), PngError> {
         let mut pos = 8;
         while pos < self.image.len() {
-            let len = u32::from_be_bytes(self.image[pos..pos + 4].try_into().unwrap());
+            if pos + 8 > self.image.len() {
+                return Err(PngError::UnexpectedEndOfFile);
+            }
+
+            let len = u32::from_be_bytes(
+                self.image[pos..pos + 4]
+                    .try_into()
+                    .map_err(|_| PngError::CorruptChunk)?,
+            );
             pos += 4;
 
-            let chunk_type: [u8; 4] = self.image[pos..pos + 4].try_into().unwrap();
+            let chunk_type: [u8; 4] = self.image[pos..pos + 4]
+                .try_into()
+                .map_err(|_| PngError::CorruptChunk)?;
             pos += 4;
 
-            let data: Vec<u8> = self.image[pos..pos + len as usize].try_into().unwrap();
-            pos += len as usize;
+            let data: Vec<u8> = self.image[pos..pos + len as usize].to_vec();
+            pos += 4 + len as usize;
 
             match &chunk_type {
                 b"IDAT" => self.idat_data.extend_from_slice(&data),
@@ -109,14 +155,18 @@ impl Png {
                 b"IEND" => break,
                 _ => (),
             }
-            pos += 4;
         }
+        Ok(())
     }
 
-    fn decompress_data(&mut self) {
+    fn decompress_data(&mut self) -> Result<(), PngError> {
         let mut decoder = ZlibDecoder::new(&self.idat_data[..]);
 
-        decoder.read_to_end(&mut self.decompressed_data);
+        decoder
+            .read_to_end(&mut self.decompressed_data)
+            .map_err(|_| PngError::DecompressionFailed)?;
+
+        Ok(())
     }
 
     fn paeth_predictor(&mut self, a: u8, b: u8, c: u8) -> u8 {
@@ -140,15 +190,26 @@ impl Png {
         return closest as u8;
     }
 
-    fn reconstruct_scanlines(&mut self) {
+    fn scanline_data_bytes(&mut self) -> usize {
+        match self.color_type {
+            0 => (self.width as usize * self.bit_depth as usize + 7) / 8,
+            2 => self.width as usize * 3 * (self.bit_depth as usize / 8),
+            3 => (self.width as usize * self.bit_depth as usize + 7) / 8,
+            4 => self.width as usize * 2 * (self.bit_depth as usize / 8),
+            6 => self.width as usize * 4 * (self.bit_depth as usize / 8),
+            _ => panic!("unsuported color type"),
+        }
+    }
+
+    fn reconstruct_scanlines(&mut self) -> Result<(), PngError> {
         let bpp = self.bytes_per_pixel();
 
-        let mut previus_row = vec![0u8; self.bytes_per_pixel() * self.width as usize];
+        let mut previus_row = vec![0u8; self.scanline_data_bytes()];
 
-        let scanline_len = 1 + self.width * self.bytes_per_pixel() as u32;
+        let scanline_len = 1 + self.scanline_data_bytes() as u32;
 
         for row in 0..self.height {
-            let mut current_row = vec![0u8; self.bytes_per_pixel() * self.width as usize];
+            let mut current_row = vec![0u8; self.scanline_data_bytes()];
 
             let pos = row * scanline_len;
             let filter = self.decompressed_data[pos as usize];
@@ -180,36 +241,46 @@ impl Png {
                     2 => raw_byte.wrapping_add(above),
                     3 => raw_byte.wrapping_add(((left as u16 + above as u16) / 2) as u8),
                     4 => raw_byte.wrapping_add(self.paeth_predictor(left, above, upper_left)),
-                    _ => panic!("invalid filter"),
+                    _ => return Err(PngError::UnsupportedFilter(filter)),
                 }
             }
             self.reconstructed_data.extend_from_slice(&current_row);
             previus_row = current_row;
         }
+        Ok(())
     }
 
-    fn decode_pixels(&mut self) {
+    fn decode_pixels(&mut self) -> Result<(), PngError> {
         match self.color_type {
-            0 => self.decode_grayscale(),
-            2 => self.decode_rgb(),
-            3 => self.decode_index(),
-            4 => self.decode_grayscale_alpha(),
-            6 => self.decode_rgba(),
-            _ => panic!("not supporting index color type yet"),
+            0 => return self.decode_grayscale(),
+            2 => return self.decode_rgb(),
+            3 => return self.decode_index(),
+            4 => return self.decode_grayscale_alpha(),
+            6 => return self.decode_rgba(),
+            _ => return Err(PngError::UnsupportedColorType(self.color_type)),
         }
     }
 
-    fn decode_grayscale(&mut self) {
+    fn decode_grayscale(&mut self) -> Result<(), PngError> {
         self.pixels.reserve(self.reconstructed_data.len());
-        for gray in &self.reconstructed_data {
+        for &gray in &self.reconstructed_data {
+            let gray = match self.bit_depth {
+                1 => gray * 255,
+                2 => gray * 85,
+                4 => gray * 17,
+                8 => gray,
+                _ => return Err(PngError::UnsupportedBitDepthForGrayscale(self.bit_depth)),
+            };
+
             let full: u32 =
-                (0xFF << 24) | ((*gray as u32) << 16) | ((*gray as u32) << 8) | *gray as u32;
+                (0xFF << 24) | ((gray as u32) << 16) | ((gray as u32) << 8) | gray as u32;
 
             self.pixels.push(full);
         }
+        Ok(())
     }
 
-    fn decode_rgb(&mut self) {
+    fn decode_rgb(&mut self) -> Result<(), PngError> {
         self.pixels.reserve(self.reconstructed_data.len() / 3);
         for pixel in self.reconstructed_data.chunks_exact(3) {
             let r = pixel[0] as u32;
@@ -220,9 +291,10 @@ impl Png {
 
             self.pixels.push(full);
         }
+        Ok(())
     }
 
-    fn decode_grayscale_alpha(&mut self) {
+    fn decode_grayscale_alpha(&mut self) -> Result<(), PngError> {
         self.pixels.reserve(self.reconstructed_data.len() / 2);
         for pixel in self.reconstructed_data.chunks_exact(2) {
             let gray = pixel[0];
@@ -233,9 +305,10 @@ impl Png {
 
             self.pixels.push(full);
         }
+        Ok(())
     }
 
-    fn decode_rgba(&mut self) {
+    fn decode_rgba(&mut self) -> Result<(), PngError> {
         self.pixels.reserve(self.reconstructed_data.len() / 4);
         for pixel in self.reconstructed_data.chunks_exact(4) {
             let r = pixel[0] as u32;
@@ -247,9 +320,10 @@ impl Png {
 
             self.pixels.push(full);
         }
+        Ok(())
     }
 
-    fn decode_index(&mut self) {
+    fn decode_index(&mut self) -> Result<(), PngError> {
         self.pixels.reserve(self.reconstructed_data.len());
         for &pixel in &self.reconstructed_data {
             let palette_pos = pixel as usize * 3;
@@ -268,15 +342,182 @@ impl Png {
 
             self.pixels.push(full);
         }
+        Ok(())
     }
 
-    pub fn parse(&mut self) {
-        self.check_signature();
-        self.parse_ihdr();
-        self.parse_chunks();
-        self.decompress_data();
-        self.reconstruct_scanlines();
-        self.decode_pixels();
+    fn unpack_pixels(&mut self) -> Result<(), PngError> {
+        let packed = self.reconstructed_data.clone();
+
+        self.reconstructed_data = Vec::new();
+
+        match self.bit_depth {
+            1 => {
+                for row in 0..self.height as usize {
+                    let mut pixels_in_row = 0;
+                    for byte in 0..self.scanline_data_bytes() {
+                        let pos = byte + row * self.scanline_data_bytes();
+
+                        let first = packed[pos] >> 7;
+                        pixels_in_row += 1;
+
+                        self.reconstructed_data.push(first);
+
+                        if pixels_in_row == self.width {
+                            break;
+                        }
+
+                        let second = (packed[pos] & 0b01000000) >> 6;
+                        pixels_in_row += 1;
+
+                        self.reconstructed_data.push(second);
+
+                        if pixels_in_row == self.width {
+                            break;
+                        }
+
+                        let third = (packed[pos] & 0b00100000) >> 5;
+                        pixels_in_row += 1;
+
+                        self.reconstructed_data.push(third);
+
+                        if pixels_in_row == self.width {
+                            break;
+                        }
+
+                        let forth = (packed[pos] & 0b00010000) >> 4;
+                        pixels_in_row += 1;
+
+                        self.reconstructed_data.push(forth);
+
+                        if pixels_in_row == self.width {
+                            break;
+                        }
+
+                        let fith = (packed[pos] & 0b00001000) >> 3;
+                        pixels_in_row += 1;
+
+                        self.reconstructed_data.push(fith);
+
+                        if pixels_in_row == self.width {
+                            break;
+                        }
+
+                        let six = (packed[pos] & 0b00000100) >> 2;
+                        pixels_in_row += 1;
+
+                        self.reconstructed_data.push(six);
+
+                        if pixels_in_row == self.width {
+                            break;
+                        }
+
+                        let seven = (packed[pos] & 0b00000010) >> 1;
+                        pixels_in_row += 1;
+
+                        self.reconstructed_data.push(seven);
+
+                        if pixels_in_row == self.width {
+                            break;
+                        }
+
+                        let eight = packed[pos] & 0b00000001;
+                        pixels_in_row += 1;
+
+                        self.reconstructed_data.push(eight);
+
+                        if pixels_in_row == self.width {
+                            break;
+                        }
+                    }
+                }
+            }
+            2 => {
+                for row in 0..self.height as usize {
+                    let mut pixels_in_row = 0;
+                    for byte in 0..self.scanline_data_bytes() {
+                        let pos = byte + row * self.scanline_data_bytes();
+
+                        let first = packed[pos] >> 6;
+                        pixels_in_row += 1;
+
+                        self.reconstructed_data.push(first);
+
+                        if pixels_in_row == self.width {
+                            break;
+                        }
+
+                        let second = (packed[pos] & 0b00110000) >> 4;
+                        pixels_in_row += 1;
+
+                        self.reconstructed_data.push(second);
+
+                        if pixels_in_row == self.width {
+                            break;
+                        }
+
+                        let third = (packed[pos] & 0b00001100) >> 2;
+                        pixels_in_row += 1;
+
+                        self.reconstructed_data.push(third);
+
+                        if pixels_in_row == self.width {
+                            break;
+                        }
+
+                        let forth = packed[pos] & 0b00000011;
+                        pixels_in_row += 1;
+
+                        self.reconstructed_data.push(forth);
+
+                        if pixels_in_row == self.width {
+                            break;
+                        }
+                    }
+                }
+            }
+            4 => {
+                for row in 0..self.height as usize {
+                    let mut pixels_in_row = 0;
+                    for byte in 0..self.scanline_data_bytes() {
+                        let pos = byte + row * self.scanline_data_bytes();
+
+                        let first = packed[pos] >> 4;
+                        pixels_in_row += 1;
+
+                        self.reconstructed_data.push(first);
+
+                        if pixels_in_row == self.width {
+                            break;
+                        }
+
+                        let second = packed[pos] & 0x0F;
+                        pixels_in_row += 1;
+
+                        self.reconstructed_data.push(second);
+
+                        if pixels_in_row == self.width {
+                            break;
+                        }
+                    }
+                }
+            }
+            8 => self.reconstructed_data = packed.clone(),
+            _ => return Err(PngError::UnsupportedBitDepth(self.bit_depth)),
+        }
+
+        Ok(())
+    }
+
+    pub fn parse(&mut self) -> Result<(), PngError> {
+        self.check_signature()?;
+        self.parse_ihdr()?;
+        self.parse_chunks()?;
+        self.decompress_data()?;
+        self.reconstruct_scanlines()?;
+        self.unpack_pixels()?;
+        self.decode_pixels()?;
+
+        Ok(())
     }
 
     pub fn draw(&mut self) {
@@ -297,16 +538,12 @@ impl Png {
 
         window.set_target_fps(60);
 
-        window
-            .update_with_buffer(&self.pixels, self.width as usize, self.height as usize)
-            .unwrap();
-
         while window.is_open() {
             let (window_w, window_h) = window.get_size();
 
             let scale_x = window_w as f32 / image_w as f32;
             let scale_y = window_h as f32 / image_h as f32;
-            let scale = scale_x.min(scale_y).min(1.0);
+            let scale = scale_x.min(scale_y);
 
             let draw_w = ((image_w as f32 * scale) as usize).max(1);
             let draw_h = ((image_h as f32 * scale) as usize).max(1);
