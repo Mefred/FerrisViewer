@@ -20,8 +20,8 @@ pub enum PngError {
 
 pub struct Png {
     image: Vec<u8>,
-    width: u32,
-    height: u32,
+    pub width: u32,
+    pub height: u32,
     bit_depth: u8,
     color_type: u8,
     compression: u8,
@@ -29,14 +29,14 @@ pub struct Png {
     interlace: u8,
     idat_data: Vec<u8>,
     decompressed_data: Vec<u8>,
-    pixels: Vec<u32>,
+    pub pixels: Vec<u8>,
     reconstructed_data: Vec<u8>,
     palette: Vec<u8>,
     tRNS: Vec<u8>,
 }
 
 impl Png {
-    pub fn new(path: &str) -> Result<Self, PngError> {
+    pub fn new(path: String) -> Result<Self, PngError> {
         Ok(Self {
             image: fs::read(path).map_err(|_| PngError::FileReadFailed)?,
             width: 0,
@@ -73,10 +73,18 @@ impl Png {
 
         let mut pos = 16;
 
-        self.width = u32::from_be_bytes(self.image[pos..pos + 4].try_into().unwrap());
+        self.width = u32::from_be_bytes(
+            self.image[pos..pos + 4]
+                .try_into()
+                .map_err(|_| PngError::UnexpectedEndOfFile)?,
+        );
         pos += 4;
 
-        self.height = u32::from_be_bytes(self.image[pos..pos + 4].try_into().unwrap());
+        self.height = u32::from_be_bytes(
+            self.image[pos..pos + 4]
+                .try_into()
+                .map_err(|_| PngError::UnexpectedEndOfFile)?,
+        );
         pos += 4;
 
         self.bit_depth = self.image[pos];
@@ -115,14 +123,14 @@ impl Png {
         Ok(())
     }
 
-    fn bytes_per_pixel(&self) -> usize {
+    fn bytes_per_pixel(&self) -> Result<usize, PngError> {
         match self.color_type {
-            0 => 1, // grayscale
-            2 => 3, // rgb
-            3 => 1, // indexed
-            4 => 2, // grayscale + alpha
-            6 => 4, // rgba
-            _ => panic!("invalid bit depth {}", self.bit_depth),
+            0 => Ok(1), // grayscale
+            2 => Ok(3), // rgb
+            3 => Ok(1), // indexed
+            4 => Ok(2), // grayscale + alpha
+            6 => Ok(4), // rgba
+            _ => Err(PngError::UnsupportedColorType(self.color_type)),
         }
     }
 
@@ -145,6 +153,9 @@ impl Png {
                 .map_err(|_| PngError::CorruptChunk)?;
             pos += 4;
 
+            if pos + len as usize > self.image.len() {
+                return Err(PngError::UnexpectedEndOfFile);
+            }
             let data: Vec<u8> = self.image[pos..pos + len as usize].to_vec();
             pos += 4 + len as usize;
 
@@ -169,7 +180,7 @@ impl Png {
         Ok(())
     }
 
-    fn paeth_predictor(&mut self, a: u8, b: u8, c: u8) -> u8 {
+    fn paeth_predictor(a: u8, b: u8, c: u8) -> u8 {
         let left = a as i32;
         let above = b as i32;
         let upper_left = c as i32;
@@ -190,36 +201,42 @@ impl Png {
         return closest as u8;
     }
 
-    fn scanline_data_bytes(&mut self) -> usize {
+    fn scanline_data_bytes(&self) -> Result<usize, PngError> {
         match self.color_type {
-            0 => (self.width as usize * self.bit_depth as usize + 7) / 8,
-            2 => self.width as usize * 3 * (self.bit_depth as usize / 8),
-            3 => (self.width as usize * self.bit_depth as usize + 7) / 8,
-            4 => self.width as usize * 2 * (self.bit_depth as usize / 8),
-            6 => self.width as usize * 4 * (self.bit_depth as usize / 8),
-            _ => panic!("unsuported color type"),
+            0 => Ok((self.width as usize * self.bit_depth as usize + 7) / 8),
+            2 => Ok(self.width as usize * 3 * (self.bit_depth as usize / 8)),
+            3 => Ok((self.width as usize * self.bit_depth as usize + 7) / 8),
+            4 => Ok(self.width as usize * 2 * (self.bit_depth as usize / 8)),
+            6 => Ok(self.width as usize * 4 * (self.bit_depth as usize / 8)),
+            _ => Err(PngError::UnsupportedColorType(self.color_type)),
         }
     }
 
     fn reconstruct_scanlines(&mut self) -> Result<(), PngError> {
-        let bpp = self.bytes_per_pixel();
+        let bpp = self.bytes_per_pixel()?;
 
-        let mut previus_row = vec![0u8; self.scanline_data_bytes()];
+        let mut previus_row = vec![0u8; self.scanline_data_bytes()?];
 
-        let scanline_len = 1 + self.scanline_data_bytes() as u32;
+        let scanline_len = 1 + self.scanline_data_bytes()? as u32;
 
         for row in 0..self.height {
-            let mut current_row = vec![0u8; self.scanline_data_bytes()];
+            let mut current_row = vec![0u8; self.scanline_data_bytes()?];
 
             let pos = row * scanline_len;
-            let filter = self.decompressed_data[pos as usize];
+            let filter = *self
+                .decompressed_data
+                .get(pos as usize)
+                .ok_or(PngError::UnexpectedEndOfFile)?;
 
             for byte in 1..scanline_len {
                 let idx = byte as usize - 1;
 
                 let pos = byte + row * scanline_len;
 
-                let raw_byte = self.decompressed_data[pos as usize];
+                let raw_byte = *self
+                    .decompressed_data
+                    .get(pos as usize)
+                    .ok_or(PngError::UnexpectedEndOfFile)?;
 
                 let left = if idx >= bpp {
                     current_row[idx - bpp]
@@ -240,7 +257,7 @@ impl Png {
                     1 => raw_byte.wrapping_add(left),
                     2 => raw_byte.wrapping_add(above),
                     3 => raw_byte.wrapping_add(((left as u16 + above as u16) / 2) as u8),
-                    4 => raw_byte.wrapping_add(self.paeth_predictor(left, above, upper_left)),
+                    4 => raw_byte.wrapping_add(Png::paeth_predictor(left, above, upper_left)),
                     _ => return Err(PngError::UnsupportedFilter(filter)),
                 }
             }
@@ -272,10 +289,10 @@ impl Png {
                 _ => return Err(PngError::UnsupportedBitDepthForGrayscale(self.bit_depth)),
             };
 
-            let full: u32 =
-                (0xFF << 24) | ((gray as u32) << 16) | ((gray as u32) << 8) | gray as u32;
-
-            self.pixels.push(full);
+            self.pixels.push(gray);
+            self.pixels.push(gray);
+            self.pixels.push(gray);
+            self.pixels.push(0xFF);
         }
         Ok(())
     }
@@ -283,13 +300,14 @@ impl Png {
     fn decode_rgb(&mut self) -> Result<(), PngError> {
         self.pixels.reserve(self.reconstructed_data.len() / 3);
         for pixel in self.reconstructed_data.chunks_exact(3) {
-            let r = pixel[0] as u32;
-            let g = pixel[1] as u32;
-            let b = pixel[2] as u32;
+            let r = pixel[0];
+            let g = pixel[1];
+            let b = pixel[2];
 
-            let full: u32 = (0xFF << 24) | (r << 16) | (g << 8) | b;
-
-            self.pixels.push(full);
+            self.pixels.push(r);
+            self.pixels.push(g);
+            self.pixels.push(b);
+            self.pixels.push(0xFF);
         }
         Ok(())
     }
@@ -300,10 +318,10 @@ impl Png {
             let gray = pixel[0];
             let alpha = pixel[1];
 
-            let full: u32 =
-                ((alpha as u32) << 24) | ((gray as u32) << 16) | ((gray as u32) << 8) | gray as u32;
-
-            self.pixels.push(full);
+            self.pixels.push(gray);
+            self.pixels.push(gray);
+            self.pixels.push(gray);
+            self.pixels.push(alpha);
         }
         Ok(())
     }
@@ -311,14 +329,15 @@ impl Png {
     fn decode_rgba(&mut self) -> Result<(), PngError> {
         self.pixels.reserve(self.reconstructed_data.len() / 4);
         for pixel in self.reconstructed_data.chunks_exact(4) {
-            let r = pixel[0] as u32;
-            let g = pixel[1] as u32;
-            let b = pixel[2] as u32;
-            let a = pixel[3] as u32;
+            let r = pixel[0];
+            let g = pixel[1];
+            let b = pixel[2];
+            let a = pixel[3];
 
-            let full: u32 = (a << 24) | (r << 16) | (g << 8) | b;
-
-            self.pixels.push(full);
+            self.pixels.push(r);
+            self.pixels.push(g);
+            self.pixels.push(b);
+            self.pixels.push(a);
         }
         Ok(())
     }
@@ -328,19 +347,24 @@ impl Png {
         for &pixel in &self.reconstructed_data {
             let palette_pos = pixel as usize * 3;
 
-            let r = self.palette[palette_pos] as u32;
-            let g = self.palette[palette_pos + 1] as u32;
-            let b = self.palette[palette_pos + 2] as u32;
+            if self.palette.len() < palette_pos + 3 {
+                return Err(PngError::UnexpectedEndOfFile);
+            }
 
-            let a: u32 = if self.tRNS.len() > pixel as usize {
-                self.tRNS[pixel as usize] as u32
+            let r = self.palette[palette_pos];
+            let g = self.palette[palette_pos + 1];
+            let b = self.palette[palette_pos + 2];
+
+            let a: u8 = if self.tRNS.len() > pixel as usize {
+                self.tRNS[pixel as usize]
             } else {
                 255
             };
 
-            let full: u32 = (a << 24) | (r << 16) | (g << 8) | b;
-
-            self.pixels.push(full);
+            self.pixels.push(r);
+            self.pixels.push(g);
+            self.pixels.push(b);
+            self.pixels.push(a);
         }
         Ok(())
     }
@@ -354,8 +378,8 @@ impl Png {
             1 => {
                 for row in 0..self.height as usize {
                     let mut pixels_in_row = 0;
-                    for byte in 0..self.scanline_data_bytes() {
-                        let pos = byte + row * self.scanline_data_bytes();
+                    for byte in 0..self.scanline_data_bytes()? {
+                        let pos = byte + row * self.scanline_data_bytes()?;
 
                         let first = packed[pos] >> 7;
                         pixels_in_row += 1;
@@ -434,8 +458,8 @@ impl Png {
             2 => {
                 for row in 0..self.height as usize {
                     let mut pixels_in_row = 0;
-                    for byte in 0..self.scanline_data_bytes() {
-                        let pos = byte + row * self.scanline_data_bytes();
+                    for byte in 0..self.scanline_data_bytes()? {
+                        let pos = byte + row * self.scanline_data_bytes()?;
 
                         let first = packed[pos] >> 6;
                         pixels_in_row += 1;
@@ -478,8 +502,8 @@ impl Png {
             4 => {
                 for row in 0..self.height as usize {
                     let mut pixels_in_row = 0;
-                    for byte in 0..self.scanline_data_bytes() {
-                        let pos = byte + row * self.scanline_data_bytes();
+                    for byte in 0..self.scanline_data_bytes()? {
+                        let pos = byte + row * self.scanline_data_bytes()?;
 
                         let first = packed[pos] >> 4;
                         pixels_in_row += 1;
@@ -518,59 +542,5 @@ impl Png {
         self.decode_pixels()?;
 
         Ok(())
-    }
-
-    pub fn draw(&mut self) {
-        let image_w = self.width as usize;
-        let image_h = self.height as usize;
-
-        let mut window = Window::new(
-            "image",
-            image_w.min(1600),
-            image_h.min(900),
-            WindowOptions {
-                resize: true,
-                scale: minifb::Scale::X1,
-                ..WindowOptions::default()
-            },
-        )
-        .unwrap();
-
-        window.set_target_fps(60);
-
-        while window.is_open() {
-            let (window_w, window_h) = window.get_size();
-
-            let scale_x = window_w as f32 / image_w as f32;
-            let scale_y = window_h as f32 / image_h as f32;
-            let scale = scale_x.min(scale_y);
-
-            let draw_w = ((image_w as f32 * scale) as usize).max(1);
-            let draw_h = ((image_h as f32 * scale) as usize).max(1);
-
-            let mut buffer = vec![0u32; window_h * window_w];
-
-            for y in 0..draw_h {
-                let src_y = (y * image_h / draw_h).min(image_h - 1);
-
-                for x in 0..draw_w {
-                    let src_x = (x * image_w / draw_w).min(image_w - 1);
-
-                    let pixel = self.pixels[src_y * image_w + src_x];
-
-                    let offset_x = window_w.saturating_sub(draw_w) / 2;
-                    let offset_y = window_h.saturating_sub(draw_h) / 2;
-
-                    let dist_x = offset_x + x;
-                    let dist_y = offset_y + y;
-
-                    buffer[dist_y * window_w + dist_x] = pixel;
-                }
-            }
-
-            window
-                .update_with_buffer(&buffer, window_w, window_h)
-                .unwrap();
-        }
     }
 }
