@@ -1,6 +1,8 @@
-use crate::formats::png::{self, Png};
+use crate::formats::bmp::Bmp;
+use crate::formats::png::Png;
+use crate::formats::tga::Tga;
 use iced::widget::{column, container, image, slider, text};
-use iced::{Alignment, ContentFit, Element, Fill, Rotation};
+use iced::{ContentFit, Element, Fill, Rotation};
 
 pub struct FerrisViewer {
     image: image::Handle,
@@ -21,23 +23,33 @@ impl FerrisViewer {
         let mut width = 0;
         let mut height = 0;
 
-        match Png::new(path) {
-            Ok(mut img) => match img.parse() {
-                Ok(_) => {
-                    width = img.width;
-                    height = img.height;
-                    pixels = img.pixels;
-                }
+        if path.ends_with("png") {
+            match Png::new(path) {
+                Ok(mut img) => match img.parse() {
+                    Ok(_) => {
+                        width = img.width;
+                        height = img.height;
+                        pixels = img.pixels;
+                    }
+                    Err(e) => println!("Failed to load image: {:?}", e),
+                },
                 Err(e) => println!("Failed to load image: {:?}", e),
-            },
-            Err(e) => println!("Failed to load image: {:?}", e),
+            }
+        } else if path.ends_with("bmp") {
+            let mut img = Bmp::new(path);
+            img.parse();
+            width = img.width;
+            height = img.height;
+            pixels = img.pixels;
+        } else if path.ends_with("tga") {
+            let mut img = Tga::new(path);
+            img.parse();
+            width = img.width as u32;
+            height = img.height as u32;
+            pixels = img.pixels;
+        } else {
+            panic!("Not a supported file extension");
         }
-
-        println!(
-            "expected={} actual={}",
-            width as usize * height as usize * 4,
-            pixels.len()
-        );
 
         let handle = image::Handle::from_rgba(width, height, pixels);
 

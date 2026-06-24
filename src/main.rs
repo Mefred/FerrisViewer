@@ -1,5 +1,7 @@
 mod app;
 mod formats;
+use formats::bmp::Bmp;
+use formats::tga::Tga;
 use std::env;
 
 fn main() -> iced::Result {

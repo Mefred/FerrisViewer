@@ -3,15 +3,15 @@ use std::fs;
 
 pub struct Bmp {
     image: Vec<u8>,
-    width: u32,
-    height: u32,
-    pixels: Vec<u32>,
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
     bits_per_pixel: u16,
     pixel_offset: u32,
 }
 
 impl Bmp {
-    pub fn new(path: &str) -> Self {
+    pub fn new(path: String) -> Self {
         Self {
             image: fs::read(path).unwrap(),
             width: 0,
@@ -72,35 +72,19 @@ impl Bmp {
                 let r = self.image[pos + 2];
                 if num_pixels == 4 {
                     let a = self.image[pos + 3];
-                    let pixel_full: u32 =
-                        ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
-                    self.pixels.push(pixel_full);
+                    self.pixels.push(r);
+                    self.pixels.push(g);
+                    self.pixels.push(b);
+                    self.pixels.push(a);
                 } else if num_pixels == 3 {
-                    let pixel_full: u32 = ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
-                    self.pixels.push(pixel_full);
+                    self.pixels.push(r);
+                    self.pixels.push(g);
+                    self.pixels.push(b);
+                    self.pixels.push(0xFF);
                 } else {
                     panic!("idk how it got this far");
                 }
             }
-        }
-    }
-
-    pub fn draw(self) {
-        let mut window = Window::new(
-            "image",
-            self.width as usize,
-            self.height as usize,
-            WindowOptions {
-                scale: minifb::Scale::X1,
-                ..WindowOptions::default()
-            },
-        )
-        .unwrap();
-        window
-            .update_with_buffer(&self.pixels, self.width as usize, self.height as usize)
-            .unwrap();
-        while window.is_open() {
-            window.update();
         }
     }
 }

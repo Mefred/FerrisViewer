@@ -3,15 +3,15 @@ use std::fs;
 
 pub struct Tga {
     image: Vec<u8>,
-    width: u16,
-    height: u16,
+    pub width: u16,
+    pub height: u16,
     bits_per_pixel: u8,
     flip: bool,
-    pixels: Vec<u32>,
+    pub pixels: Vec<u8>,
 }
 
 impl Tga {
-    pub fn new(path: &str) -> Self {
+    pub fn new(path: String) -> Self {
         Self {
             image: fs::read(path).unwrap(),
             width: 0,
@@ -66,33 +66,17 @@ impl Tga {
                 if self.bits_per_pixel == 32 {
                     let a = self.image[pos + 3];
 
-                    self.pixels.push(
-                        ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | b as u32,
-                    );
+                    self.pixels.push(r);
+                    self.pixels.push(g);
+                    self.pixels.push(b);
+                    self.pixels.push(a);
                 } else {
-                    self.pixels
-                        .push(((r as u32) << 16) | ((g as u32) << 8) | b as u32);
+                    self.pixels.push(r);
+                    self.pixels.push(g);
+                    self.pixels.push(b);
+                    self.pixels.push(0xFF);
                 }
             }
-        }
-    }
-
-    pub fn draw(self) {
-        let mut window = Window::new(
-            "image",
-            self.width as usize,
-            self.height as usize,
-            WindowOptions {
-                scale: minifb::Scale::X1,
-                ..WindowOptions::default()
-            },
-        )
-        .unwrap();
-        window
-            .update_with_buffer(&self.pixels, self.width as usize, self.height as usize)
-            .unwrap();
-        while window.is_open() {
-            window.update();
         }
     }
 }
