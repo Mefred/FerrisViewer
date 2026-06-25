@@ -1,11 +1,16 @@
 mod app;
 mod formats;
-use formats::bmp::Bmp;
-use formats::tga::Tga;
 use std::env;
+use std::path::PathBuf;
 
 fn main() -> iced::Result {
-    let path = env::args().nth(1).expect("Usage: ferrisviewer <image>");
+    let _path = env::args().nth(1);
+    let mut path = PathBuf::new();
+
+    match _path {
+        None => (),
+        Some(other) => path = other.try_into().unwrap(),
+    }
 
     iced::application(
         move || app::FerrisViewer::new(path.clone()),

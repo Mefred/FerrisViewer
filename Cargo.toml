@@ -1,9 +1,10 @@
 [package]
 name = "FerrisViewer"
-version = "1.5.0"
+version = "1.5.1"
 edition = "2024"
 
 [dependencies]
 flate2 = "1.1.9"
 iced = { version = "0.14.0", features = ["image"] }
 minifb = "0.28.0"
+rfd = "0.17.2"

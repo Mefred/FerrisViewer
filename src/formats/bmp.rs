@@ -1,5 +1,5 @@
 use minifb::{self, Window, WindowOptions};
-use std::fs;
+use std::{fs, path::PathBuf};
 
 pub struct Bmp {
     image: Vec<u8>,
@@ -11,7 +11,7 @@ pub struct Bmp {
 }
 
 impl Bmp {
-    pub fn new(path: String) -> Self {
+    pub fn new(path: PathBuf) -> Self {
         Self {
             image: fs::read(path).unwrap(),
             width: 0,

@@ -2,6 +2,7 @@ use flate2::read::ZlibDecoder;
 use minifb::{self, Window, WindowOptions};
 use std::fs;
 use std::io::Read;
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum PngError {
@@ -36,7 +37,7 @@ pub struct Png {
 }
 
 impl Png {
-    pub fn new(path: String) -> Result<Self, PngError> {
+    pub fn new(path: PathBuf) -> Result<Self, PngError> {
         Ok(Self {
             image: fs::read(path).map_err(|_| PngError::FileReadFailed)?,
             width: 0,
