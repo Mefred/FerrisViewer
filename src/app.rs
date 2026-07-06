@@ -11,6 +11,7 @@ pub struct FerrisViewer {
     image: Option<image::Handle>,
 
     width: f32,
+    max_width: f32,
     rotation: Rotation,
     content_fit: ContentFit,
 }
@@ -27,6 +28,7 @@ impl FerrisViewer {
         let mut viewer = Self {
             image: None,
             width: 400.0,
+            max_width: 400.0,
             rotation: Rotation::default(),
             content_fit: ContentFit::Contain,
         };
@@ -44,7 +46,8 @@ impl FerrisViewer {
                 Ok(mut img) => match img.parse() {
                     Ok(_) => {
                         self.image =
-                            Some(image::Handle::from_rgba(img.width, img.height, img.pixels))
+                            Some(image::Handle::from_rgba(img.width, img.height, img.pixels));
+                        self.max_width = img.width as f32;
                     }
                     Err(e) => println!("Failed to load image: {:?}", e),
                 },
@@ -54,6 +57,7 @@ impl FerrisViewer {
                 let mut img = Bmp::new(path);
                 img.parse();
                 self.image = Some(image::Handle::from_rgba(img.width, img.height, img.pixels));
+                self.max_width = img.width as f32;
             }
             Some("tga") => {
                 let mut img = Tga::new(path);
@@ -63,6 +67,7 @@ impl FerrisViewer {
                     img.height as u32,
                     img.pixels,
                 ));
+                self.max_width = img.width as f32;
             }
             None => (),
             _ => panic!("Not a supported file extension"),
@@ -97,7 +102,7 @@ impl FerrisViewer {
     pub fn view(&self) -> Element<'_, Message> {
         let controls = column![
             button("Open").on_press(Message::OpenPressed),
-            slider(100.0..=1000.0, self.width, Message::WidthChanged),
+            slider(100.0..=self.max_width, self.width, Message::WidthChanged),
             text(format!("Width: {}", self.width))
         ]
         .spacing(10);

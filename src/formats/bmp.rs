@@ -1,4 +1,3 @@
-use minifb::{self, Window, WindowOptions};
 use std::{fs, path::PathBuf};
 
 pub struct Bmp {

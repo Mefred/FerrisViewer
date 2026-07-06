@@ -1,5 +1,4 @@
 use flate2::read::ZlibDecoder;
-use minifb::{self, Window, WindowOptions};
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
@@ -33,7 +32,7 @@ pub struct Png {
     pub pixels: Vec<u8>,
     reconstructed_data: Vec<u8>,
     palette: Vec<u8>,
-    tRNS: Vec<u8>,
+    trns: Vec<u8>,
 }
 
 impl Png {
@@ -52,7 +51,7 @@ impl Png {
             pixels: Vec::new(),
             reconstructed_data: Vec::new(),
             palette: Vec::new(),
-            tRNS: Vec::new(),
+            trns: Vec::new(),
         })
     }
 
@@ -163,7 +162,7 @@ impl Png {
             match &chunk_type {
                 b"IDAT" => self.idat_data.extend_from_slice(&data),
                 b"PLTE" => self.palette = data,
-                b"tRNS" => self.tRNS.extend_from_slice(&data),
+                b"tRNS" => self.trns.extend_from_slice(&data),
                 b"IEND" => break,
                 _ => (),
             }
@@ -356,8 +355,8 @@ impl Png {
             let g = self.palette[palette_pos + 1];
             let b = self.palette[palette_pos + 2];
 
-            let a: u8 = if self.tRNS.len() > pixel as usize {
-                self.tRNS[pixel as usize]
+            let a: u8 = if self.trns.len() > pixel as usize {
+                self.trns[pixel as usize]
             } else {
                 255
             };

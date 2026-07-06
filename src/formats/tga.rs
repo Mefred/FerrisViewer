@@ -1,4 +1,3 @@
-use minifb::{self, Window, WindowOptions};
 use std::fs;
 use std::path::PathBuf;
 
@@ -56,7 +55,7 @@ impl Tga {
 
         for row in 0..self.height {
             for pixel in 0..self.width {
-                let mut pos: usize = start
+                let pos: usize = start
                     + (row as usize) * ((self.width as usize) * bits_per_pixel)
                     + (pixel as usize) * bits_per_pixel;
 
